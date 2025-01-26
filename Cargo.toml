@@ -1,0 +1,9 @@
+[package]
+name = "notifier"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = "0.8.1"
+serenity = "0.12.4"
+tracing = "0.1.41"
