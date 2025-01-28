@@ -9,7 +9,7 @@ Custom discord bot to post updates to the Stormlight labs discord server
   - Root endpoint for status
   - Webhook endpoint
 - Add structured logging
-- Implement GitHub event parsing
+- Implement GitHub event parsing for *subscribed* repositories
   - Push
     - author, branch, commits
   - PR
