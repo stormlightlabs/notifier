@@ -21,12 +21,12 @@ impl EventHandler for Handler {
         tokio::spawn(async move {
             let mut rx = rx_lock.lock().await.take().expect("Receiver already taken");
 
-            while let Some(event) = rx.recv().await {
-                let msg = format!(
-                    "```json\n{}\n```",
-                    serde_json::to_string_pretty(&event).unwrap()
-                );
-                if let Err(e) = channel_id.say(&ctx.http, msg).await {
+            while let Some(_event) = rx.recv().await {
+                // let msg = format!(
+                //     "```json\n{}\n```",
+                //     serde_json::to_string_pretty(&event).unwrap()
+                // );
+                if let Err(e) = channel_id.say(&ctx.http, "Received wh event").await {
                     eprintln!("Error sending message: {:?}", e);
                 }
             }

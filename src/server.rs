@@ -17,9 +17,9 @@ use axum::{
 use http_body_util::BodyExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::str::from_utf8;
 use std::{slice::Iter, sync::Arc};
 use tokio::sync::mpsc;
-
 pub struct SharedState {
     pub event_sender: mpsc::Sender<Value>,
     pub secrets: helpers::Secrets,
@@ -212,9 +212,17 @@ where
         }
     };
 
-    if let Ok(body) = std::str::from_utf8(&bytes) {
-        tracing::debug!("{direction} body = {body:?}");
-    }
+    match urlencoding::decode(from_utf8(&bytes).unwrap()) {
+        Ok(decoded) => {
+            let json_value = serde_json::json!(decoded);
+            let pretty = serde_json::to_string_pretty(&json_value).unwrap();
+            tracing::debug!("{direction} body = {pretty}");
 
-    Ok(bytes)
+            Ok(bytes)
+        }
+        Err(err) => Err((
+            StatusCode::BAD_REQUEST,
+            format!("failed to read {direction} body: {err}"),
+        )),
+    }
 }
