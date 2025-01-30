@@ -49,8 +49,7 @@ pub async fn run_discord_bot(event_receiver: mpsc::Receiver<Value>) {
         event_receiver: Arc::new(Mutex::new(Some(event_receiver))),
     };
 
-    let intents = GatewayIntents::GUILD_MESSAGES | GatewayIntents::MESSAGE_CONTENT;
-    let mut client = Client::builder(&secrets.discord_bot_token, intents)
+    let mut client = Client::builder(&secrets.discord_bot_token, GatewayIntents::GUILD_MESSAGES)
         .event_handler(bot)
         .await
         .expect("error creating client");

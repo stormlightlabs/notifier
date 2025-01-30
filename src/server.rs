@@ -6,12 +6,15 @@
 //! TODO: logging middleware
 use crate::helpers;
 use axum::{
-    extract::State,
+    body::{Body, Bytes},
+    extract::{Request, State},
     http::{status::StatusCode, HeaderMap, HeaderValue},
-    response::IntoResponse,
+    middleware::Next,
+    response::{IntoResponse, Response},
     routing::{get, post},
-    Json, Router,
+    Form, Json, Router,
 };
+use http_body_util::BodyExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{slice::Iter, sync::Arc};
@@ -115,7 +118,7 @@ fn handle_signature_256(val: &HeaderValue, _webhook_secret: &String) -> Result<(
 pub async fn github_webhook_handler(
     State(state): State<Arc<SharedState>>,
     header_map: HeaderMap,
-    Json(payload): Json<Value>,
+    Form(payload): Form<Value>,
 ) -> impl IntoResponse {
     let headers = header_map.clone();
 
@@ -168,10 +171,50 @@ pub fn create_service(state: Arc<SharedState>) -> Router {
     Router::new()
         .route("/", get(root))
         .route("/gh", post(github_webhook_handler))
+        .layer(axum::middleware::from_fn(print_request_response))
         .with_state(state)
 }
 
 pub async fn create_listener(port: u16) -> tokio::net::TcpListener {
     let addr = format!("0.0.0.0:{}", port);
     tokio::net::TcpListener::bind(addr).await.unwrap()
+}
+
+async fn print_request_response(
+    req: Request,
+    next: Next,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let (parts, body) = req.into_parts();
+    let bytes = buffer_and_print("request", body).await?;
+    let req = Request::from_parts(parts, Body::from(bytes));
+
+    let res = next.run(req).await;
+
+    let (parts, body) = res.into_parts();
+    let bytes = buffer_and_print("response", body).await?;
+    let res = Response::from_parts(parts, Body::from(bytes));
+
+    Ok(res)
+}
+
+async fn buffer_and_print<B>(direction: &str, body: B) -> Result<Bytes, (StatusCode, String)>
+where
+    B: axum::body::HttpBody<Data = Bytes>,
+    B::Error: std::fmt::Display,
+{
+    let bytes = match body.collect().await {
+        Ok(collected) => collected.to_bytes(),
+        Err(err) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("failed to read {direction} body: {err}"),
+            ));
+        }
+    };
+
+    if let Ok(body) = std::str::from_utf8(&bytes) {
+        tracing::debug!("{direction} body = {body:?}");
+    }
+
+    Ok(bytes)
 }
