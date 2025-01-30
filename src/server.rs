@@ -4,15 +4,23 @@
 //!
 //! TODO: Configure HTTPS and update tunnel with `tls_rustls`
 //! TODO: logging middleware
+use crate::helpers;
 use axum::{
-    extract::Request,
-    http::{status::StatusCode, HeaderValue},
+    extract::State,
+    http::{status::StatusCode, HeaderMap, HeaderValue},
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use std::slice::Iter;
+use serde_json::Value;
+use std::{slice::Iter, sync::Arc};
+use tokio::sync::mpsc;
+
+pub struct SharedState {
+    pub event_sender: mpsc::Sender<Value>,
+    pub secrets: helpers::Secrets,
+}
 
 enum GithubHeaders {
     HookID,
@@ -61,9 +69,7 @@ struct Status {
     github: bool,
 }
 
-/// TODO: Github status handler
-///
-/// TODO: Discord status handler
+/// TODO: Implement handlers for each service
 fn check_status() -> Status {
     Status {
         discord: true,
@@ -90,7 +96,7 @@ fn handle_user_agent_value(val: &HeaderValue) -> Result<(), ()> {
     }
 }
 
-fn handle_signature_256(val: &HeaderValue) -> Result<(), ()> {
+fn handle_signature_256(val: &HeaderValue, _webhook_secret: &String) -> Result<(), ()> {
     match val.to_str() {
         Ok(_) => Ok(()),
         Err(_) => Err(()),
@@ -106,24 +112,41 @@ fn handle_signature_256(val: &HeaderValue) -> Result<(), ()> {
 ///
 /// TODO: Check that the event and actions sent are among the set of
 /// subscriptions
-pub async fn github_webhook_handler(request: Request) -> impl IntoResponse {
-    let headers = request.headers();
+pub async fn github_webhook_handler(
+    State(state): State<Arc<SharedState>>,
+    header_map: HeaderMap,
+    Json(payload): Json<Value>,
+) -> impl IntoResponse {
+    let headers = header_map.clone();
 
     if headers.is_empty() {
         return StatusCode::BAD_REQUEST;
     }
 
+    match handle_headers(&headers, &state.secrets.webhook_secret) {
+        Ok(_) => {
+            if let Err(_) = state.event_sender.send(payload).await {
+                return StatusCode::INTERNAL_SERVER_ERROR;
+            }
+
+            StatusCode::ACCEPTED
+        }
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+fn handle_headers(headers: &HeaderMap, webhook_secret: &String) -> Result<(), ()> {
     for h in GithubHeaders::iterator() {
         match headers.get(h.as_str()) {
             Some(value) => match h {
                 GithubHeaders::UserAgent => {
                     let Ok(_) = handle_user_agent_value(value) else {
-                        return StatusCode::BAD_REQUEST;
+                        return Ok(());
                     };
                 }
                 GithubHeaders::Signature256 => {
-                    let Ok(_) = handle_signature_256(value) else {
-                        return StatusCode::BAD_REQUEST;
+                    let Ok(_) = handle_signature_256(value, &webhook_secret) else {
+                        return Err(());
                     };
                 }
                 GithubHeaders::Event
@@ -134,17 +157,18 @@ pub async fn github_webhook_handler(request: Request) -> impl IntoResponse {
                 }
                 _ => continue,
             },
-            None => return StatusCode::BAD_REQUEST,
+            None => return Err(()),
         }
     }
 
-    StatusCode::ACCEPTED
+    Ok(())
 }
 
-pub fn create_app() -> Router {
+pub fn create_service(state: Arc<SharedState>) -> Router {
     Router::new()
         .route("/", get(root))
         .route("/gh", post(github_webhook_handler))
+        .with_state(state)
 }
 
 pub async fn create_listener(port: u16) -> tokio::net::TcpListener {

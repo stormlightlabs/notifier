@@ -1,44 +1,61 @@
-//! Discord Bot implementation
+use crate::helpers;
+use serde_json::Value;
+use serenity::{all::Ready, model::id::ChannelId, prelude::*};
 use std::sync::Arc;
+use tokio::sync::{mpsc, Mutex};
 
-use serenity::all::{Context, EventHandler, Ready};
-use serenity::async_trait;
-use serenity::model::channel::Message;
-use serenity::model::id::ChannelId;
-use tokio::sync::broadcast;
-
-#[derive(Clone)]
-pub struct _DiscordMessage {
-    channel_id: u64,
-    content: String,
+struct Handler {
+    channel_id: ChannelId,
+    event_receiver: Arc<Mutex<Option<mpsc::Receiver<Value>>>>,
 }
 
-#[derive(Clone)]
-pub struct State {
-    pub _sender: broadcast::Sender<Message>,
-}
-
-pub struct Handler {
-    _state: Arc<State>,
-    pub receiver: broadcast::Receiver<Message>,
-}
-
-#[async_trait]
+#[serenity::async_trait]
 impl EventHandler for Handler {
     async fn ready(&self, ctx: Context, ready: Ready) {
         println!("{} is connected!", ready.user.name);
-        let mut rx = self.receiver.resubscribe();
-        let ctx = Arc::new(ctx);
+
+        let ctx = ctx.clone();
+        let channel_id = self.channel_id;
+        let rx_lock = self.event_receiver.clone();
 
         tokio::spawn(async move {
-            while let Ok(msg) = rx.recv().await {
-                if let Err(why) = ChannelId::new(msg.channel_id.get())
-                    .say(&ctx.http, msg.content)
-                    .await
-                {
-                    println!("Error sending message: {:?}", why);
+            let mut rx = rx_lock.lock().await.take().expect("Receiver already taken");
+
+            while let Some(event) = rx.recv().await {
+                let msg = format!(
+                    "```json\n{}\n```",
+                    serde_json::to_string_pretty(&event).unwrap()
+                );
+                if let Err(e) = channel_id.say(&ctx.http, msg).await {
+                    eprintln!("Error sending message: {:?}", e);
                 }
             }
         });
+    }
+}
+
+pub async fn run_discord_bot(event_receiver: mpsc::Receiver<Value>) {
+    let secrets = helpers::load_secrets().await;
+
+    let channel_id = ChannelId::new(
+        secrets
+            .discord_channel_id
+            .parse()
+            .expect("Invalid channel ID"),
+    );
+
+    let bot = Handler {
+        channel_id,
+        event_receiver: Arc::new(Mutex::new(Some(event_receiver))),
+    };
+
+    let intents = GatewayIntents::GUILD_MESSAGES | GatewayIntents::MESSAGE_CONTENT;
+    let mut client = Client::builder(&secrets.discord_bot_token, intents)
+        .event_handler(bot)
+        .await
+        .expect("error creating client");
+
+    if let Err(why) = client.start().await {
+        println!("Client error: {:?}", why);
     }
 }

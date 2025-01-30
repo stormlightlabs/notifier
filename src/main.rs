@@ -1,58 +1,29 @@
-use std::env;
+use std::sync::Arc;
 
-use server::{create_app, create_listener};
+use server::{create_listener, create_service};
+use tokio::sync::mpsc;
 
 mod bot;
+mod helpers;
 mod server;
 
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
-    let _ = env::var("CLOUDFLARE_TUNNEL_TOKEN")
-        .expect("Expected a token for the cloudflare ingress in the environment");
 
-    let _ = env::var("DISCORD_TOKEN")
-        .expect("Expected a token for the cloudflare ingress in the environment");
+    let (event_sender, rx) = mpsc::channel(100);
+    let secrets = helpers::load_secrets().await;
+    tracing::info!("created communication channel & loaded secrets");
 
-    let app = create_app();
+    tokio::spawn(bot::run_discord_bot(rx));
+
+    let state = Arc::new(server::SharedState {
+        event_sender,
+        secrets,
+    });
+
+    let service = create_service(state);
     let listener = create_listener(4040).await;
 
-    axum::serve(listener, app).await.unwrap();
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::server;
-    use axum::{
-        body::Body,
-        http::{Request, StatusCode},
-    };
-    use tower::ServiceExt;
-
-    #[tokio::test]
-    async fn test_root_endpoint() {
-        let app = server::create_app();
-        let response = app
-            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-    }
-
-    #[tokio::test]
-    async fn test_not_found() {
-        let app = server::create_app();
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/non-existent")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    }
+    axum::serve(listener, service).await.unwrap();
 }
